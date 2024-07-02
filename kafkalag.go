@@ -10,71 +10,109 @@ import (
 )
 
 func main() {
-	brokers := []string{
-		"localhost:9092",
-	}
+	// Define Kafka brokers
+	brokers := []string{"localhost:9092"}
 
+	// Configure Kafka client and admin
 	config := sarama.NewConfig()
 	config.Version = sarama.V3_2_0_0
 
-	client, err := sarama.NewClient(brokers, config)
+	client, admin, err := setupKafka(brokers, config)
 	if err != nil {
-		log.Fatalf("Error creating client: %v", err)
+		log.Fatalf("Error setting up Kafka: %v", err)
 	}
 	defer client.Close()
+	defer admin.Close()
 
+	// Main loop to monitor consumer group offsets
+	for {
+		checkConsumerGroupOffsets(admin, client)
+		time.Sleep(10 * time.Second) // Wait for 10 seconds before checking again
+	}
+}
+
+// setupKafka initializes the Kafka client and cluster admin
+func setupKafka(brokers []string, config *sarama.Config) (sarama.Client, sarama.ClusterAdmin, error) {
+	// Create Kafka client
+	client, err := sarama.NewClient(brokers, config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating client: %v", err)
+	}
+
+	// Create Kafka cluster admin client
 	admin, err := sarama.NewClusterAdmin(brokers, config)
 	if err != nil {
-		log.Fatalf("Error creating cluster admin: %v", err)
+		client.Close()
+		return nil, nil, fmt.Errorf("creating cluster admin: %v", err)
 	}
-	defer admin.Close()
-	var cnt int
-	fmt.Println("CG: Consumer Group;", "T: Topic;", "P: Partition;", "CO: Curr Offset;", "LO: Latest Offset")
 
-	for {
-		groups, err := admin.ListConsumerGroups()
-		if err != nil {
-			log.Fatalf("Error listing consumer groups: %v", err)
+	return client, admin, nil
+}
+
+// checkConsumerGroupOffsets retrieves and checks Kafka consumer group offsets
+func checkConsumerGroupOffsets(admin sarama.ClusterAdmin, client sarama.Client) {
+	fmt.Println("Checking consumer group offsets...")
+
+	// Retrieve list of consumer groups
+	groups, err := admin.ListConsumerGroups()
+	if err != nil {
+		log.Fatalf("Error listing consumer groups: %v", err)
+	}
+
+	// Iterate over each consumer group
+	for group := range groups {
+		// Skip consumer groups containing "middleware"
+		if strings.Contains(group, "middleware") {
+			continue
 		}
 
-		for group := range groups {
-			if strings.Contains(group, "middleware") {
+		// Retrieve offsets for the consumer group
+		offsets, err := admin.ListConsumerGroupOffsets(group, nil)
+		if err != nil {
+			log.Printf("Error getting offsets for group %s: %v", group, err)
+			continue
+		}
+
+		// Iterate over topics and their partitions
+		for topic, partitions := range offsets.Blocks {
+			// Skip topics not containing "wallet"
+			if !strings.Contains(topic, "wallet") {
 				continue
 			}
 
-			offsets, err := admin.ListConsumerGroupOffsets(group, nil)
-			if err != nil {
-				log.Printf("Error getting offsets for group %s: %v", group, err)
-				continue
-			}
-
-			for topic, partitions := range offsets.Blocks {
-				if !strings.Contains(topic, "wallet") {
+			// Iterate over partitions and their offset information
+			for partition, offsetFetchResponseBlock := range partitions {
+				// Get the latest offset for the partition
+				latestOffset, err := client.GetOffset(topic, partition, sarama.OffsetNewest)
+				if err != nil {
+					log.Printf("Error getting latest offset for %s-%d: %v", topic, partition, err)
 					continue
 				}
 
-				for partition, offsetFetchResponseBlock := range partitions {
-					latestOffset, err := client.GetOffset(topic, partition, sarama.OffsetNewest)
-					if err != nil {
-						log.Printf("Error getting latest offset for %s-%d: %v", topic, partition, err)
-						continue
-					}
-
-					lag := latestOffset - offsetFetchResponseBlock.Offset
-					if lag == 0 {
-						continue
-					}
-
-					cnt += 1
-					fmt.Printf("CG: %s, T: %s, P: %d, CO: %d, LO: %d, Lag: %d\n",
-						string(strings.Split(group, ".")[2]), string(strings.Split(topic, ".")[2]), partition, offsetFetchResponseBlock.Offset, latestOffset, lag)
-					fmt.Println()
+				// Calculate lag for the partition
+				lag := latestOffset - offsetFetchResponseBlock.Offset
+				if lag == 0 {
+					continue // Skip if no lag
 				}
+
+				// Print consumer group, topic, partition, offsets, and lag
+				fmt.Printf("CG: %s, T: %s, P: %d, CO: %d, LO: %d, Lag: %d\n",
+					extractGroupName(group), extractTopicName(topic), partition, offsetFetchResponseBlock.Offset, latestOffset, lag)
+				fmt.Println()
 			}
 		}
-		if cnt == 0 {
-			fmt.Println("No lags found")
-		}
-		time.Sleep(10 * time.Second)
 	}
+
+	// Print message if no lags were found
+	fmt.Println("No lags found")
+}
+
+// extractGroupName extracts the meaningful group name from the full Kafka consumer group string
+func extractGroupName(group string) string {
+	return strings.Split(group, ".")[2]
+}
+
+// extractTopicName extracts the meaningful topic name from the full Kafka topic string
+func extractTopicName(topic string) string {
+	return strings.Split(topic, ".")[2]
 }
