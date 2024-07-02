@@ -1,6 +1,8 @@
 # Kafka Consumer Lag Monitor
 
-This Go program monitors Kafka consumer groups and their lag. It connects to a Kafka cluster, retrieves consumer group offsets, and calculates the lag between the current and latest offsets for all the topics and partitions.
+This Go program monitors Kafka consumer groups and their lag. It connects to a Kafka cluster, retrieves consumer group offsets, and calculates the lag between the current and latest offsets for the specified topics and partitions.
+
+Feel free to edit the program as needed.
 
 ## Prerequisites
 
