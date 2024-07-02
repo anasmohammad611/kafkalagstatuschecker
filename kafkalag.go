@@ -72,7 +72,7 @@ func main() {
 				}
 			}
 		}
-		if cnt <= 0 {
+		if cnt == 0 {
 			fmt.Println("No lags found")
 		}
 		time.Sleep(10 * time.Second)
